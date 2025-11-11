@@ -2,104 +2,92 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>Symbiont PDSA Sync</title>
+    <title>Flow Visualizer</title>
     <style>
       :root {
-        color-scheme: light dark;
+        color-scheme: light;
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
       }
       body {
         margin: 0;
-        font-family: 'Inter', sans-serif;
-        background: #ffffff;
-        color: #111111;
+        background: #f5f5f7;
+        color: #111827;
       }
       .container {
-        padding: 24px;
-        display: flex;
-        flex-direction: column;
-        gap: 16px;
-        width: 320px;
-      }
-      h2 {
-        margin: 0;
-        font-size: 18px;
-      }
-      form {
         display: flex;
         flex-direction: column;
         gap: 12px;
+        padding: 20px 24px 24px;
+        max-width: 360px;
       }
-      label {
-        font-size: 12px;
+      h1 {
+        margin: 0;
+        font-size: 18px;
         font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
       }
-      input {
-        width: 100%;
-        padding: 8px 10px;
-        border-radius: 6px;
-        border: 1px solid #d0d5dd;
-        font-size: 13px;
+      p {
+        margin: 0;
+        font-size: 12px;
+        color: #4b5563;
       }
-      input:focus {
+      textarea {
+        min-height: 160px;
+        resize: vertical;
+        font-family: 'JetBrains Mono', 'SFMono-Regular', 'Consolas', monospace;
+        font-size: 12px;
+        padding: 12px;
+        border: 1px solid #d1d5db;
+        border-radius: 8px;
+        background: #ffffff;
+        color: inherit;
+      }
+      textarea:focus {
         outline: 2px solid #6366f1;
-        border-color: #6366f1;
+        outline-offset: 2px;
+        border-color: transparent;
       }
       button {
         background: #111827;
-        color: white;
+        color: #ffffff;
         border: none;
+        border-radius: 8px;
         padding: 10px 12px;
-        border-radius: 6px;
         font-size: 13px;
+        font-weight: 600;
         cursor: pointer;
+        transition: background 0.2s ease;
+      }
+      button:hover {
+        background: #1f2937;
       }
       button:disabled {
-        opacity: 0.5;
+        opacity: 0.6;
         cursor: progress;
       }
-      #status {
+      .status {
         font-size: 12px;
-        background: #f8fafc;
-        padding: 8px 10px;
-        border-radius: 6px;
-        border: 1px solid #e2e8f0;
-        min-height: 40px;
+        border-radius: 8px;
+        padding: 10px 12px;
+        background: #eef2ff;
+        color: #3730a3;
       }
-      #status[data-state='error'] {
-        color: #b91c1c;
+      .status[data-variant='error'] {
         background: #fef2f2;
-        border-color: #fecaca;
+        color: #b91c1c;
       }
     </style>
   </head>
   <body>
-    <div class="container">
-      <h2>Symbiont PDSA Sync</h2>
-      <form id="sync-form">
-        <div>
-          <label for="repo">GitHub Repository</label>
-          <input
-            id="repo"
-            type="text"
-            name="repo"
-            placeholder="owner/repo"
-            required
-          />
-        </div>
-        <div>
-          <label for="branch">Branch</label>
-          <input id="branch" type="text" name="branch" value="main" />
-        </div>
-        <div>
-          <label for="basePath">Base Path</label>
-          <input id="basePath" type="text" name="basePath" placeholder="/" />
-        </div>
-        <button type="submit">Sync from GitHub</button>
-      </form>
-      <div id="status" data-state="info">Ready to sync design DNA into Figma.</div>
-    </div>
+    <main class="container">
+      <div>
+        <h1>Flow Visualizer</h1>
+        <p>Paste the contents of your <code>flows.json</code> and generate Figma pages.</p>
+      </div>
+      <label for="flowsInput" style="font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: #111827;">flows.json</label>
+      <textarea id="flowsInput" placeholder="Paste flows.json here"></textarea>
+      <button id="generateButton" type="button">Generate Flows</button>
+      <div id="status" class="status" role="status">Waiting for flows.json…</div>
+    </main>
     <script src="ui.js"></script>
   </body>
 </html>
