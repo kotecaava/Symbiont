@@ -1,8 +1,8 @@
 {
-  "name": "Symbiont PDSA Sync",
-  "id": "symbiont-pdsa-sync",
+  "name": "Flow Visualizer",
+  "id": "symbiont-flow-visualizer",
   "api": "1.0.0",
   "main": "dist/code.js",
   "ui": "dist/ui.html",
-  "editorType": ["figma", "dev"]
+  "editorType": ["figma"]
 }
