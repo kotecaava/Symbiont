@@ -4,16 +4,19 @@ This repository contains a Figma plugin that assembles PDSA (Product Design Syst
 
 ## Getting started
 
-1. If you just need to run the plugin, import the manifest immediately—the compiled assets live in `dist/` and are checked into source control so the plugin works out of the box.
-
-2. When you want to regenerate the bundles after modifying the TypeScript sources:
+1. Install dependencies:
 
    ```bash
    npm install
+   ```
+
+2. Build the plugin bundles:
+
+   ```bash
    npm run build
    ```
 
-   This rebuilds `dist/code.js`, `dist/ui.js`, and copies `ui.html` so they can be referenced by `manifest.json`.
+   This produces `dist/code.js`, `dist/ui.js`, and copies `ui.html` so they can be referenced by `manifest.json`.
 
 3. In Figma, choose **Plugins → Development → Import plugin from manifest…** and select the `manifest.json` file in this repository.
 
