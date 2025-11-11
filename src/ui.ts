@@ -126,7 +126,6 @@ async function fetchGitHubJson<T>(
   const response = await fetch(url, {
     headers: {
       'Accept': 'application/vnd.github.v3+json',
-      'User-Agent': 'symbiont-pdsa-sync-plugin',
     },
   });
 
