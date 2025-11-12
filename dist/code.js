@@ -1,20 +1,4 @@
 "use strict";
-var __defProp = Object.defineProperty;
-var __getOwnPropSymbols = Object.getOwnPropertySymbols;
-var __hasOwnProp = Object.prototype.hasOwnProperty;
-var __propIsEnum = Object.prototype.propertyIsEnumerable;
-var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
-var __spreadValues = (a, b) => {
-  for (var prop in b || (b = {}))
-    if (__hasOwnProp.call(b, prop))
-      __defNormalProp(a, prop, b[prop]);
-  if (__getOwnPropSymbols)
-    for (var prop of __getOwnPropSymbols(b)) {
-      if (__propIsEnum.call(b, prop))
-        __defNormalProp(a, prop, b[prop]);
-    }
-  return a;
-};
 var __async = (__this, __arguments, generator) => {
   return new Promise((resolve, reject) => {
     var fulfilled = (value) => {
@@ -37,272 +21,221 @@ var __async = (__this, __arguments, generator) => {
 };
 
 // src/code.ts
-var UI_WIDTH = 420;
-var UI_HEIGHT = 340;
-var STEP_WIDTH = 600;
-var STEP_HEIGHT = 400;
-var HORIZONTAL_GAP = 200;
-var VERTICAL_GAP = 200;
-var STEP_PLUGIN_DATA_KEY = "flow_step_id";
-var FLOW_PLUGIN_DATA_KEY = "flow_id";
-var STEP_TITLE_PLUGIN_DATA_KEY = "flow_step_title";
-var STEP_PAGE_PLUGIN_DATA_KEY = "flow_step_page";
-var FONT_NAME = { family: "Inter", style: "Regular" };
+var UI_WIDTH = 440;
+var UI_HEIGHT = 520;
+var PNG_EXPORT_OPTIONS = {
+  format: "PNG",
+  constraint: { type: "SCALE", value: 2 }
+};
+var MAX_CONCURRENT_EXPORTS = 4;
 figma.showUI(__html__, { width: UI_WIDTH, height: UI_HEIGHT });
-var fontLoaded = false;
 figma.ui.onmessage = (msg) => __async(exports, null, function* () {
-  if (!msg || msg.type !== "generate-flows") {
+  if (!msg) {
     return;
   }
-  try {
-    yield ensureFontLoaded();
-    const flowsFile = parseFlowsFile(msg.raw);
-    const stats = yield buildFlows(flowsFile);
-    const successMessage = {
-      type: "done",
-      flows: stats.flows,
-      steps: stats.steps
-    };
-    figma.ui.postMessage(successMessage);
-    figma.notify(`Generated ${stats.flows} flow page${stats.flows === 1 ? "" : "s"}.`);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    const errorMessage = { type: "error", message };
-    figma.ui.postMessage(errorMessage);
-    figma.notify(`Failed to generate flows: ${message}`);
-    console.error("[flow-visualizer] generation failed", error);
+  switch (msg.type) {
+    case "scan": {
+      const registry = scanDocument();
+      const message = {
+        type: "scan-result",
+        payload: registry
+      };
+      figma.ui.postMessage(message);
+      break;
+    }
+    case "thumbnail": {
+      const dataUrl = yield getThumbnail(msg.nodeId);
+      const message = {
+        type: "thumbnail-result",
+        nodeId: msg.nodeId,
+        dataUrl
+      };
+      figma.ui.postMessage(message);
+      break;
+    }
+    case "close": {
+      figma.closePlugin();
+      break;
+    }
+    default:
+      break;
   }
 });
-function ensureFontLoaded() {
-  return __async(this, null, function* () {
-    if (!fontLoaded) {
-      yield figma.loadFontAsync(FONT_NAME);
-      fontLoaded = true;
-    }
-  });
-}
-function parseFlowsFile(raw) {
-  if (!raw || !raw.trim()) {
-    throw new Error("Paste a flows.json file before generating.");
-  }
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (error) {
-    throw new Error("Invalid JSON provided. Please check the flows.json content.");
-  }
-  if (!parsed || typeof parsed !== "object") {
-    throw new Error("flows.json content is malformed.");
-  }
-  const value = parsed;
-  if (!Array.isArray(value.flows) || value.flows.length === 0) {
-    throw new Error("flows.json does not include any flows.");
-  }
-  if (!Array.isArray(value.pages)) {
-    value.pages = [];
-  }
-  return value;
-}
-function buildFlows(file) {
-  return __async(this, null, function* () {
-    let totalSteps = 0;
-    for (const flow of file.flows) {
-      totalSteps += yield buildFlow(flow);
-    }
-    return { flows: file.flows.length, steps: totalSteps };
-  });
-}
-function buildFlow(flow) {
-  return __async(this, null, function* () {
-    var _a;
-    const pageName = `Flow \u2013 ${flow.label}`;
-    const page = ensurePage(pageName);
-    const stepsById = new Map(flow.steps.map((step) => [step.id, step]));
-    const existingFrames = collectExistingFrames(page, flow.id);
-    const framesById = /* @__PURE__ */ new Map();
-    const usedStepIds = /* @__PURE__ */ new Set();
-    const layout = computeLayout(flow, stepsById);
-    for (const step of flow.steps) {
-      const frame = ensureStepFrame(page, (_a = existingFrames.get(step.id)) != null ? _a : null, flow, step);
-      applyLayout(frame, layout.positions.get(step.id));
-      updateStepContent(frame, step);
-      framesById.set(step.id, frame);
-      usedStepIds.add(step.id);
-    }
-    removeUnusedFrames(existingFrames, usedStepIds);
-    yield connectFrames(flow, framesById);
-    return flow.steps.length;
-  });
-}
-function collectExistingFrames(page, flowId) {
-  const frames = /* @__PURE__ */ new Map();
-  for (const child of page.children) {
-    if (child.type !== "FRAME") {
+figma.ui.postMessage({ type: "ready" });
+function scanDocument() {
+  var _a;
+  const items = [];
+  for (const page of figma.root.children) {
+    if (page.type !== "PAGE") {
       continue;
     }
-    const stepId = child.getPluginData(STEP_PLUGIN_DATA_KEY);
-    const recordedFlowId = child.getPluginData(FLOW_PLUGIN_DATA_KEY);
-    if (stepId && recordedFlowId === flowId) {
-      frames.set(stepId, child);
-    }
+    traverseChildren(page, page.name, items);
   }
-  return frames;
+  items.sort((a, b) => a.name.localeCompare(b.name, void 0, { sensitivity: "base" }));
+  return {
+    fileKey: (_a = figma.fileKey) != null ? _a : null,
+    collectedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    total: items.length,
+    items
+  };
 }
-function ensureStepFrame(page, existing, flow, step) {
-  const frame = existing != null ? existing : figma.createFrame();
-  frame.name = `${step.id} \u2013 ${step.name}`;
-  frame.resizeWithoutConstraints(STEP_WIDTH, STEP_HEIGHT);
-  frame.fills = [{ type: "SOLID", color: { r: 1, g: 1, b: 1 } }];
-  frame.strokes = [{ type: "SOLID", color: { r: 0.82, g: 0.85, b: 0.89 } }];
-  frame.strokeWeight = 2;
-  frame.cornerRadius = 16;
-  frame.layoutMode = "VERTICAL";
-  frame.primaryAxisSizingMode = "FIXED";
-  frame.counterAxisSizingMode = "FIXED";
-  frame.itemSpacing = 16;
-  frame.paddingTop = 32;
-  frame.paddingBottom = 32;
-  frame.paddingLeft = 32;
-  frame.paddingRight = 32;
-  frame.primaryAxisAlignItems = "MIN";
-  frame.counterAxisAlignItems = "MIN";
-  frame.setPluginData(STEP_PLUGIN_DATA_KEY, step.id);
-  frame.setPluginData(FLOW_PLUGIN_DATA_KEY, flow.id);
-  if (frame.parent !== page) {
-    page.appendChild(frame);
-  }
-  return frame;
-}
-function updateStepContent(frame, step) {
-  const title = ensureTextNode(frame, STEP_TITLE_PLUGIN_DATA_KEY);
-  title.characters = step.name;
-  title.fontName = FONT_NAME;
-  title.fontSize = 32;
-  title.fills = [{ type: "SOLID", color: { r: 0.1, g: 0.1, b: 0.1 } }];
-  title.textAutoResize = "WIDTH_AND_HEIGHT";
-  const pageIdText = ensureTextNode(frame, STEP_PAGE_PLUGIN_DATA_KEY);
-  pageIdText.characters = `Page ID: ${step.page}`;
-  pageIdText.fontName = FONT_NAME;
-  pageIdText.fontSize = 18;
-  pageIdText.fills = [{ type: "SOLID", color: { r: 0.34, g: 0.4, b: 0.47 } }];
-  pageIdText.textAutoResize = "WIDTH_AND_HEIGHT";
-}
-function ensureTextNode(frame, pluginDataKey) {
-  const existing = frame.children.find(
-    (child) => child.type === "TEXT" && child.getPluginData(pluginDataKey) === "true"
-  );
-  if (existing) {
-    return existing;
-  }
-  const text = figma.createText();
-  text.fontName = FONT_NAME;
-  text.setPluginData(pluginDataKey, "true");
-  frame.appendChild(text);
-  return text;
-}
-function removeUnusedFrames(existing, usedStepIds) {
-  for (const [stepId, frame] of existing) {
-    if (!usedStepIds.has(stepId)) {
-      frame.remove();
-    }
+function traverseChildren(parent, pageName, items) {
+  for (const child of parent.children) {
+    processNode(child, pageName, items);
   }
 }
-function computeLayout(flow, stepsById) {
-  const positions = /* @__PURE__ */ new Map();
-  const queue = [];
-  const visited = /* @__PURE__ */ new Set();
-  queue.push({ id: flow.start, column: 0, row: 0 });
-  const branchRowOffsets = [0, -1, 1, -2, 2, -3, 3];
-  while (queue.length > 0) {
-    const current = queue.shift();
-    if (visited.has(current.id)) {
-      continue;
-    }
-    visited.add(current.id);
-    positions.set(current.id, { column: current.column, row: current.row });
-    const step = stepsById.get(current.id);
-    if (!step) {
-      continue;
-    }
-    if (step.next) {
-      const nextId = step.next;
-      if (!positions.has(nextId)) {
-        queue.push({ id: nextId, column: current.column + 1, row: current.row });
-      }
-    }
-    if (step.branches && step.branches.length > 0) {
-      const usableOffsets = branchRowOffsets.slice(1);
-      step.branches.forEach((branch, index) => {
-        var _a;
-        const rowOffset = (_a = usableOffsets[index]) != null ? _a : usableOffsets[usableOffsets.length - 1];
-        const targetRow = current.row + rowOffset;
-        if (!positions.has(branch.next)) {
-          queue.push({ id: branch.next, column: current.column + 1, row: targetRow });
-        }
-      });
-    }
+function processNode(node, pageName, items) {
+  if (node.type === "COMPONENT") {
+    items.push(createComponentItem(node, "COMPONENT", pageName));
   }
-  for (const step of flow.steps) {
-    if (!positions.has(step.id)) {
-      positions.set(step.id, { column: flow.steps.indexOf(step), row: 0 });
-    }
-  }
-  return { positions };
-}
-function applyLayout(frame, position) {
-  var _a, _b;
-  const column = (_a = position == null ? void 0 : position.column) != null ? _a : 0;
-  const row = (_b = position == null ? void 0 : position.row) != null ? _b : 0;
-  const x = column * (STEP_WIDTH + HORIZONTAL_GAP);
-  const y = row * (STEP_HEIGHT + VERTICAL_GAP);
-  frame.x = x;
-  frame.y = y;
-}
-function connectFrames(flow, framesById) {
-  return __async(this, null, function* () {
-    for (const step of flow.steps) {
-      const sourceFrame = framesById.get(step.id);
-      if (!sourceFrame) {
+  if (node.type === "COMPONENT_SET") {
+    items.push(createComponentSetItem(node, pageName));
+    for (const variant of node.children) {
+      if (variant.type !== "COMPONENT") {
         continue;
       }
-      const reactions = [];
-      if (step.next) {
-        const target = framesById.get(step.next);
-        if (target) {
-          reactions.push(createReaction(target));
-        }
-      }
-      if (step.branches) {
-        step.branches.forEach((branch) => {
-          const target = framesById.get(branch.next);
-          if (target) {
-            reactions.push(createReaction(target, branch.condition));
-          }
-        });
-      }
-      sourceFrame.reactions = reactions;
+      items.push(createVariantItem(node, variant, pageName));
     }
+  }
+  if ("children" in node && node.type !== "COMPONENT_SET") {
+    traverseChildren(node, pageName, items);
+  }
+}
+function createComponentItem(node, from, pageName) {
+  var _a;
+  return {
+    id: node.id,
+    key: (_a = node.key) != null ? _a : void 0,
+    name: node.name,
+    canonical: canonicalize(node.name),
+    description: sanitizeDescription(node.description),
+    from,
+    pageName
+  };
+}
+function createComponentSetItem(node, pageName) {
+  var _a;
+  return {
+    id: node.id,
+    key: (_a = node.key) != null ? _a : void 0,
+    name: node.name,
+    canonical: canonicalize(node.name),
+    description: sanitizeDescription(node.description),
+    from: "COMPONENT_SET",
+    pageName
+  };
+}
+function createVariantItem(set, node, pageName) {
+  var _a, _b;
+  const variantProps = parseVariantProps(node.name);
+  const description = (_a = sanitizeDescription(node.description)) != null ? _a : sanitizeDescription(set.description);
+  return {
+    id: node.id,
+    key: (_b = node.key) != null ? _b : void 0,
+    name: node.name,
+    canonical: canonicalize(node.name),
+    description,
+    from: "VARIANT",
+    variantProps: variantProps != null ? variantProps : void 0,
+    pageName
+  };
+}
+function canonicalize(name) {
+  const trimmed = name.trim().toLowerCase();
+  return trimmed.replace(/\s+/g, "-").replace(/\//g, ".").replace(/_+/g, "_").replace(/-+/g, "-").replace(/\.+/g, ".");
+}
+function sanitizeDescription(description) {
+  if (!description) {
+    return void 0;
+  }
+  const value = description.trim();
+  return value.length > 0 ? value : void 0;
+}
+function parseVariantProps(name) {
+  const parts = name.split(",");
+  const result = {};
+  let found = false;
+  for (const rawPart of parts) {
+    const cleaned = rawPart.trim();
+    if (!cleaned) {
+      continue;
+    }
+    const equalsIndex = cleaned.indexOf("=");
+    if (equalsIndex === -1) {
+      return null;
+    }
+    const key = cleaned.slice(0, equalsIndex).trim();
+    const value = cleaned.slice(equalsIndex + 1).trim();
+    if (!key || !value) {
+      return null;
+    }
+    result[key] = value;
+    found = true;
+  }
+  return found ? result : null;
+}
+var thumbnailCache = /* @__PURE__ */ new Map();
+var thumbnailPromises = /* @__PURE__ */ new Map();
+var thumbnailQueue = [];
+var activeExports = 0;
+function getThumbnail(nodeId) {
+  return __async(this, null, function* () {
+    var _a;
+    if (thumbnailCache.has(nodeId)) {
+      return (_a = thumbnailCache.get(nodeId)) != null ? _a : null;
+    }
+    const existing = thumbnailPromises.get(nodeId);
+    if (existing) {
+      return existing;
+    }
+    const promise = new Promise((resolve) => {
+      thumbnailQueue.push(() => __async(this, null, function* () {
+        try {
+          const node = figma.getNodeById(nodeId);
+          if (!node || !isExportableNode(node)) {
+            thumbnailCache.set(nodeId, null);
+            resolve(null);
+            return;
+          }
+          const data = yield node.exportAsync(PNG_EXPORT_OPTIONS);
+          const dataUrl = `data:image/png;base64,${figma.base64Encode(data)}`;
+          thumbnailCache.set(nodeId, dataUrl);
+          resolve(dataUrl);
+        } catch (error) {
+          console.error("[component-browser] Thumbnail export failed", error);
+          thumbnailCache.set(nodeId, null);
+          const message = {
+            type: "error",
+            message: "Thumbnail export failed. Please try again."
+          };
+          figma.ui.postMessage(message);
+          resolve(null);
+        }
+      }));
+      processQueue();
+    });
+    thumbnailPromises.set(nodeId, promise);
+    promise.finally(() => {
+      thumbnailPromises.delete(nodeId);
+    });
+    return promise;
   });
 }
-function createReaction(target, label) {
-  return __spreadValues({
-    trigger: { type: "ON_CLICK" },
-    action: {
-      type: "NODE",
-      destinationId: target.id,
-      navigation: "NAVIGATE",
-      transition: null
+function processQueue() {
+  while (activeExports < MAX_CONCURRENT_EXPORTS && thumbnailQueue.length > 0) {
+    const task = thumbnailQueue.shift();
+    if (!task) {
+      continue;
     }
-  }, label ? { label } : {});
-}
-function ensurePage(name) {
-  const existing = figma.root.children.find(
-    (page2) => page2.type === "PAGE" && page2.name === name
-  );
-  if (existing) {
-    return existing;
+    activeExports += 1;
+    task().catch((error) => {
+      console.error("[component-browser] Thumbnail task failed", error);
+    }).finally(() => {
+      activeExports = Math.max(0, activeExports - 1);
+      processQueue();
+    });
   }
-  const page = figma.createPage();
-  page.name = name;
-  return page;
+}
+function isExportableNode(node) {
+  return "exportAsync" in node && typeof node.exportAsync === "function";
 }
