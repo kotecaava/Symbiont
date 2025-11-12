@@ -1,6 +1,16 @@
 const UI_WIDTH = 440;
 const UI_HEIGHT = 520;
 
+const LOG_PREFIX = '[component-browser]';
+
+function log(...values: unknown[]) {
+  console.log(LOG_PREFIX, ...values);
+}
+
+function logError(...values: unknown[]) {
+  console.error(LOG_PREFIX, ...values);
+}
+
 const PNG_EXPORT_OPTIONS: ExportSettingsImage = {
   format: 'PNG',
   constraint: { type: 'SCALE', value: 2 },
@@ -15,25 +25,56 @@ figma.ui.onmessage = async (msg: UiMessage) => {
     return;
   }
 
+  log('Received UI message', msg.type);
+
   switch (msg.type) {
     case 'scan': {
-      const registry = scanDocument();
-      const message: PluginToUiScanResult = {
-        type: 'scan-result',
-        payload: registry,
-      };
-      figma.ui.postMessage(message);
+      const started = Date.now();
+      log('Starting document scan');
+      try {
+        const registry = scanDocument();
+        const duration = Date.now() - started;
+        log('Completed document scan', { durationMs: duration, total: registry.total });
+        const message: PluginToUiScanResult = {
+          type: 'scan-result',
+          payload: registry,
+        };
+        figma.ui.postMessage(message);
+      } catch (error) {
+        logError('Document scan failed', error);
+        const message: PluginToUiError = {
+          type: 'error',
+          message: 'Failed to scan components. Check console for details.',
+        };
+        figma.ui.postMessage(message);
+      }
       break;
     }
 
     case 'thumbnail': {
-      const dataUrl = await getThumbnail(msg.nodeId);
-      const message: PluginToUiThumbnailResult = {
-        type: 'thumbnail-result',
-        nodeId: msg.nodeId,
-        dataUrl,
-      };
-      figma.ui.postMessage(message);
+      log('Thumbnail requested', msg.nodeId);
+      try {
+        const dataUrl = await getThumbnail(msg.nodeId);
+        const message: PluginToUiThumbnailResult = {
+          type: 'thumbnail-result',
+          nodeId: msg.nodeId,
+          dataUrl,
+        };
+        figma.ui.postMessage(message);
+      } catch (error) {
+        logError('Thumbnail request failed', { nodeId: msg.nodeId, error });
+        const message: PluginToUiError = {
+          type: 'error',
+          message: 'Failed to export thumbnail. Check console for details.',
+        };
+        figma.ui.postMessage(message);
+        const fallback: PluginToUiThumbnailResult = {
+          type: 'thumbnail-result',
+          nodeId: msg.nodeId,
+          dataUrl: null,
+        };
+        figma.ui.postMessage(fallback);
+      }
       break;
     }
 
@@ -96,6 +137,7 @@ function scanDocument(): Registry {
       continue;
     }
 
+    log('Scanning page', { page: page.name });
     traverseChildren(page, page.name, items);
   }
 
@@ -117,15 +159,18 @@ function traverseChildren(parent: ChildrenMixin, pageName: string, items: Compon
 
 function processNode(node: SceneNode | ComponentSetNode, pageName: string, items: ComponentItem[]) {
   if (node.type === 'COMPONENT') {
+    log('Found component', { id: node.id, name: node.name, pageName });
     items.push(createComponentItem(node, 'COMPONENT', pageName));
   }
 
   if (node.type === 'COMPONENT_SET') {
+    log('Found component set', { id: node.id, name: node.name, pageName, variants: node.children.length });
     items.push(createComponentSetItem(node, pageName));
     for (const variant of node.children) {
       if (variant.type !== 'COMPONENT') {
         continue;
       }
+      log('Found variant', { id: variant.id, name: variant.name, pageName, set: node.name });
       items.push(createVariantItem(node, variant, pageName));
     }
   }
@@ -234,11 +279,13 @@ let activeExports = 0;
 
 async function getThumbnail(nodeId: string): Promise<string | null> {
   if (thumbnailCache.has(nodeId)) {
+    log('Thumbnail cache hit', { nodeId });
     return thumbnailCache.get(nodeId) ?? null;
   }
 
   const existing = thumbnailPromises.get(nodeId);
   if (existing) {
+    log('Thumbnail promise in-flight', { nodeId });
     return existing;
   }
 
@@ -247,17 +294,19 @@ async function getThumbnail(nodeId: string): Promise<string | null> {
       try {
         const node = figma.getNodeById(nodeId);
         if (!node || !isExportableNode(node)) {
+          log('Thumbnail request node not exportable', { nodeId });
           thumbnailCache.set(nodeId, null);
           resolve(null);
           return;
         }
 
+        log('Exporting thumbnail', { nodeId });
         const data = await node.exportAsync(PNG_EXPORT_OPTIONS);
         const dataUrl = `data:image/png;base64,${figma.base64Encode(data)}`;
         thumbnailCache.set(nodeId, dataUrl);
         resolve(dataUrl);
       } catch (error) {
-        console.error('[component-browser] Thumbnail export failed', error);
+        logError('Thumbnail export failed', { nodeId, error });
         thumbnailCache.set(nodeId, null);
         const message: PluginToUiError = {
           type: 'error',
@@ -286,12 +335,14 @@ function processQueue() {
     }
 
     activeExports += 1;
+    log('Processing thumbnail queue', { activeExports, pending: thumbnailQueue.length });
     task()
       .catch((error) => {
-        console.error('[component-browser] Thumbnail task failed', error);
+        logError('Thumbnail task failed', error);
       })
       .finally(() => {
         activeExports = Math.max(0, activeExports - 1);
+        log('Thumbnail task completed', { activeExports, pending: thumbnailQueue.length });
         processQueue();
       });
   }

@@ -46,6 +46,15 @@ type PluginMessage = PluginScanMessage | PluginThumbnailMessage | PluginReadyMes
 const ROW_HEIGHT = 88;
 const THUMBNAIL_SIZE = 44;
 const SEARCH_DEBOUNCE = 40;
+const LOG_PREFIX = '[component-browser][ui]';
+
+function log(...values: unknown[]) {
+  console.log(LOG_PREFIX, ...values);
+}
+
+function logError(...values: unknown[]) {
+  console.error(LOG_PREFIX, ...values);
+}
 
 const thumbnails = new Map<string, string | null>();
 const pendingThumbnails = new Set<string>();
@@ -79,6 +88,7 @@ interface RowElements {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+  log('UI booting');
   searchInput = document.getElementById('searchInput') as HTMLInputElement;
   rescanButton = document.getElementById('rescanButton') as HTMLButtonElement;
   metaLine = document.getElementById('metaLine') as HTMLDivElement;
@@ -94,6 +104,7 @@ document.addEventListener('DOMContentLoaded', () => {
       window.clearTimeout(searchDebounceHandle);
     }
     const value = searchInput.value;
+    log('Search input changed', value);
     searchDebounceHandle = window.setTimeout(() => {
       applySearch(value);
     }, SEARCH_DEBOUNCE);
@@ -110,6 +121,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   rescanButton.addEventListener('click', () => {
+    log('Rescan button clicked');
     requestScan();
   });
 
@@ -129,6 +141,7 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
+    log('Received plugin message', message.type);
     handlePluginMessage(message);
   };
 
@@ -144,6 +157,7 @@ function handlePluginMessage(message: PluginMessage) {
       onThumbnailResult(message);
       break;
     case 'ready':
+      log('Plugin signaled ready');
       requestScan();
       break;
     case 'error':
@@ -158,6 +172,8 @@ function onScanResult(payload: Registry) {
   isScanning = false;
   rescanButton.disabled = false;
   hideError();
+
+  log('Scan result received', { total: payload.total, collectedAt: payload.collectedAt });
 
   rowCache.clear();
   pendingThumbnails.clear();
@@ -176,6 +192,8 @@ function onScanResult(payload: Registry) {
 function onThumbnailResult(message: PluginThumbnailMessage) {
   pendingThumbnails.delete(message.nodeId);
   thumbnails.set(message.nodeId, message.dataUrl);
+
+  log('Thumbnail result received', { nodeId: message.nodeId, hasData: Boolean(message.dataUrl) });
 
   const elements = rowCache.get(message.nodeId);
   if (elements) {
@@ -215,6 +233,7 @@ function applySearch(value: string) {
   filtered = applyFilter(items, searchTerm);
   listElement.scrollTop = 0;
   render();
+  log('Applied search', { term: searchTerm, results: filtered.length });
 }
 
 function applyFilter(source: AugmentedItem[], term: string): AugmentedItem[] {
@@ -232,11 +251,13 @@ function applyFilter(source: AugmentedItem[], term: string): AugmentedItem[] {
 
 function requestScan() {
   if (isScanning) {
+    log('Scan request ignored because scan is already running');
     return;
   }
   isScanning = true;
   rescanButton.disabled = true;
   metaLine.textContent = 'Scanning…';
+  log('Requesting scan from plugin');
   parent.postMessage({ pluginMessage: { type: 'scan' } }, '*');
 }
 
@@ -384,6 +405,7 @@ function maybeRequestThumbnail(item: AugmentedItem) {
     return;
   }
   pendingThumbnails.add(item.id);
+  log('Requesting thumbnail', { nodeId: item.id });
   parent.postMessage({ pluginMessage: { type: 'thumbnail', nodeId: item.id } }, '*');
 }
 
@@ -424,6 +446,7 @@ function formatTimestamp(iso: string): string {
 }
 
 function showError(message: string) {
+  logError('Displaying error', message);
   errorBanner.textContent = message;
   errorBanner.classList.remove('hidden');
   if (isScanning) {
@@ -433,6 +456,7 @@ function showError(message: string) {
 }
 
 function hideError() {
+  log('Hiding error banner');
   errorBanner.textContent = '';
   errorBanner.classList.add('hidden');
 }

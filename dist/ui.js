@@ -24,6 +24,13 @@
   var ROW_HEIGHT = 88;
   var THUMBNAIL_SIZE = 44;
   var SEARCH_DEBOUNCE = 40;
+  var LOG_PREFIX = "[component-browser][ui]";
+  function log(...values) {
+    console.log(LOG_PREFIX, ...values);
+  }
+  function logError(...values) {
+    console.error(LOG_PREFIX, ...values);
+  }
   var thumbnails = /* @__PURE__ */ new Map();
   var pendingThumbnails = /* @__PURE__ */ new Set();
   var rowCache = /* @__PURE__ */ new Map();
@@ -42,6 +49,7 @@
   var errorBanner;
   var searchDebounceHandle;
   document.addEventListener("DOMContentLoaded", () => {
+    log("UI booting");
     searchInput = document.getElementById("searchInput");
     rescanButton = document.getElementById("rescanButton");
     metaLine = document.getElementById("metaLine");
@@ -55,6 +63,7 @@
         window.clearTimeout(searchDebounceHandle);
       }
       const value = searchInput.value;
+      log("Search input changed", value);
       searchDebounceHandle = window.setTimeout(() => {
         applySearch(value);
       }, SEARCH_DEBOUNCE);
@@ -69,6 +78,7 @@
       }
     });
     rescanButton.addEventListener("click", () => {
+      log("Rescan button clicked");
       requestScan();
     });
     listElement.addEventListener("scroll", () => {
@@ -85,6 +95,7 @@
       if (!message) {
         return;
       }
+      log("Received plugin message", message.type);
       handlePluginMessage(message);
     };
     requestScan();
@@ -98,6 +109,7 @@
         onThumbnailResult(message);
         break;
       case "ready":
+        log("Plugin signaled ready");
         requestScan();
         break;
       case "error":
@@ -111,6 +123,7 @@
     isScanning = false;
     rescanButton.disabled = false;
     hideError();
+    log("Scan result received", { total: payload.total, collectedAt: payload.collectedAt });
     rowCache.clear();
     pendingThumbnails.clear();
     registry = payload;
@@ -124,6 +137,7 @@
   function onThumbnailResult(message) {
     pendingThumbnails.delete(message.nodeId);
     thumbnails.set(message.nodeId, message.dataUrl);
+    log("Thumbnail result received", { nodeId: message.nodeId, hasData: Boolean(message.dataUrl) });
     const elements = rowCache.get(message.nodeId);
     if (elements) {
       updateThumbnail(elements.thumbnail, message.nodeId);
@@ -154,6 +168,7 @@
     filtered = applyFilter(items, searchTerm);
     listElement.scrollTop = 0;
     render();
+    log("Applied search", { term: searchTerm, results: filtered.length });
   }
   function applyFilter(source, term) {
     if (!term) {
@@ -167,11 +182,13 @@
   }
   function requestScan() {
     if (isScanning) {
+      log("Scan request ignored because scan is already running");
       return;
     }
     isScanning = true;
     rescanButton.disabled = true;
     metaLine.textContent = "Scanning\u2026";
+    log("Requesting scan from plugin");
     parent.postMessage({ pluginMessage: { type: "scan" } }, "*");
   }
   function render() {
@@ -293,6 +310,7 @@
       return;
     }
     pendingThumbnails.add(item.id);
+    log("Requesting thumbnail", { nodeId: item.id });
     parent.postMessage({ pluginMessage: { type: "thumbnail", nodeId: item.id } }, "*");
   }
   function updateEmptyState() {
@@ -326,6 +344,7 @@
     return `${hours}:${minutes}:${seconds}`;
   }
   function showError(message) {
+    logError("Displaying error", message);
     errorBanner.textContent = message;
     errorBanner.classList.remove("hidden");
     if (isScanning) {
@@ -334,6 +353,7 @@
     }
   }
   function hideError() {
+    log("Hiding error banner");
     errorBanner.textContent = "";
     errorBanner.classList.add("hidden");
   }
