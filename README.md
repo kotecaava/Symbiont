@@ -1,30 +1,41 @@
-# Symbiont – PDSA Figma Plugin
+# DS Component Browser (v0.1)
 
-This repository contains a Figma plugin that assembles PDSA (Product Design Systems Architecture) data stored in a GitHub repository into structured Figma pages.
+A lightweight Figma plugin that indexes the components and variants in the current file and presents them in a searchable browser. It is designed as a zero-network, current-file-only utility for quickly locating component definitions.
 
-## Getting started
+## Install locally
 
-1. If you just need to run the plugin, import the manifest immediately—the compiled assets live in `dist/` and are checked into source control so the plugin works out of the box.
-
-2. When you want to regenerate the bundles after modifying the TypeScript sources:
-
+1. Install dependencies (first run only):
    ```bash
    npm install
+   ```
+2. Build the plugin bundle:
+   ```bash
    npm run build
    ```
+3. In Figma choose **Plugins → Development → Import plugin from manifest…** and pick `manifest.json` from this repository. The compiled assets live in `dist/` and are checked into source control for convenience.
 
-   This rebuilds `dist/code.js`, `dist/ui.js`, and copies `ui.html` so they can be referenced by `manifest.json`.
+## Build commands
 
-3. In Figma, choose **Plugins → Development → Import plugin from manifest…** and select the `manifest.json` file in this repository.
+- `npm run build` – rebuilds the main bundle (`dist/code.js`), UI bundle (`dist/ui.js`), and copies `dist/ui.html`.
+- `npm run build:main` – rebuilds only the plugin worker bundle.
+- `npm run build:ui` – rebuilds only the UI script bundle.
+- `npm run build:html` – copies the static HTML shell into `dist/`.
 
-## Usage
+## Known limitations
 
-1. Run the plugin inside a Figma file.
-2. Provide the GitHub repository (e.g. `owner/repo`), branch, and optional base path where the PDSA files live.
-3. Click **Sync from GitHub**. The plugin downloads `pds.json`, the flow definitions, and the design system map, then:
-   - Builds a **System – Library** page grouping all mapped components by category.
-   - Generates one page per flow with breakpoint frames and screen compositions.
-   - Lays out a “Parts” area for each flow showing all component instances used.
-   - Wires prototype navigation links defined in the flow JSON interactions.
+- Scans the current file only; it does not browse remote/team libraries.
+- Thumbnails are requested lazily on demand and cached for the current session only.
+- No persistence is stored between sessions (no localStorage/IndexedDB usage).
 
-The plugin is read-only: it never writes back to GitHub.
+## QA test checklist
+
+| Test | Status |
+| ---- | ------ |
+| Opening the plugin triggers a scan; shows count and timestamp. | Pending manual QA |
+| Searching by full component name returns correct items. | Pending manual QA |
+| Searching by partial name/canonical/page/variant tokens filters correctly. | Pending manual QA |
+| Thumbnails appear within 300–800 ms after the row becomes visible. | Pending manual QA |
+| Clicking a row copies the node id (verify by pasting). | Pending manual QA |
+| Rescan updates counts after components change. | Pending manual QA |
+| Handles large files (~3k items) without crashing. | Pending manual QA |
+| Works on both Mac and Windows Figma desktop apps. | Pending manual QA |
