@@ -1,369 +1,353 @@
-const UI_WIDTH = 420;
-const UI_HEIGHT = 340;
+const UI_WIDTH = 440;
+const UI_HEIGHT = 520;
 
-const STEP_WIDTH = 600;
-const STEP_HEIGHT = 400;
-const HORIZONTAL_GAP = 200;
-const VERTICAL_GAP = 200;
+const LOG_PREFIX = '[component-browser]';
 
-const STEP_PLUGIN_DATA_KEY = 'flow_step_id';
-const FLOW_PLUGIN_DATA_KEY = 'flow_id';
-const STEP_TITLE_PLUGIN_DATA_KEY = 'flow_step_title';
-const STEP_PAGE_PLUGIN_DATA_KEY = 'flow_step_page';
+function log(...values: unknown[]) {
+  console.log(LOG_PREFIX, ...values);
+}
 
-const FONT_NAME: FontName = { family: 'Inter', style: 'Regular' };
+function logError(...values: unknown[]) {
+  console.error(LOG_PREFIX, ...values);
+}
 
-type Branch = {
-  condition: string;
-  next: string;
+const PNG_EXPORT_OPTIONS: ExportSettingsImage = {
+  format: 'PNG',
+  constraint: { type: 'SCALE', value: 2 },
 };
 
-type Step = {
-  id: string;
-  name: string;
-  page: string;
-  next?: string;
-  branches?: Branch[];
-};
-
-type Flow = {
-  id: string;
-  label: string;
-  start: string;
-  steps: Step[];
-};
-
-type PageSpec = {
-  id: string;
-  label: string;
-  breakpoints?: string[];
-  layout?: unknown;
-  components: unknown[];
-};
-
-type FlowsFile = {
-  pds_version: string;
-  flows: Flow[];
-  pages: PageSpec[];
-};
-
-type UiToPluginMessage = {
-  type: 'generate-flows';
-  raw: string;
-};
-
-type PluginToUiMessage =
-  | { type: 'done'; flows: number; steps: number }
-  | { type: 'error'; message: string };
+const MAX_CONCURRENT_EXPORTS = 4;
 
 figma.showUI(__html__, { width: UI_WIDTH, height: UI_HEIGHT });
 
-let fontLoaded = false;
-
-figma.ui.onmessage = async (msg: UiToPluginMessage) => {
-  if (!msg || msg.type !== 'generate-flows') {
+figma.ui.onmessage = async (msg: UiMessage) => {
+  if (!msg) {
     return;
   }
 
-  try {
-    await ensureFontLoaded();
-    const flowsFile = parseFlowsFile(msg.raw);
-    const stats = await buildFlows(flowsFile);
-    const successMessage: PluginToUiMessage = {
-      type: 'done',
-      flows: stats.flows,
-      steps: stats.steps,
-    };
-    figma.ui.postMessage(successMessage);
-    figma.notify(`Generated ${stats.flows} flow page${stats.flows === 1 ? '' : 's'}.`);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    const errorMessage: PluginToUiMessage = { type: 'error', message };
-    figma.ui.postMessage(errorMessage);
-    figma.notify(`Failed to generate flows: ${message}`);
-    console.error('[flow-visualizer] generation failed', error);
-  }
-};
+  log('Received UI message', msg.type);
 
-async function ensureFontLoaded() {
-  if (!fontLoaded) {
-    await figma.loadFontAsync(FONT_NAME);
-    fontLoaded = true;
-  }
-}
-
-function parseFlowsFile(raw: string): FlowsFile {
-  if (!raw || !raw.trim()) {
-    throw new Error('Paste a flows.json file before generating.');
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (error) {
-    throw new Error('Invalid JSON provided. Please check the flows.json content.');
-  }
-
-  if (!parsed || typeof parsed !== 'object') {
-    throw new Error('flows.json content is malformed.');
-  }
-
-  const value = parsed as Partial<FlowsFile>;
-  if (!Array.isArray(value.flows) || value.flows.length === 0) {
-    throw new Error('flows.json does not include any flows.');
-  }
-
-  if (!Array.isArray(value.pages)) {
-    value.pages = [];
-  }
-
-  return value as FlowsFile;
-}
-
-async function buildFlows(file: FlowsFile): Promise<{ flows: number; steps: number }> {
-  let totalSteps = 0;
-
-  for (const flow of file.flows) {
-    totalSteps += await buildFlow(flow);
-  }
-
-  return { flows: file.flows.length, steps: totalSteps };
-}
-
-async function buildFlow(flow: Flow): Promise<number> {
-  const pageName = `Flow – ${flow.label}`;
-  const page = ensurePage(pageName);
-  const stepsById = new Map(flow.steps.map((step) => [step.id, step] as const));
-
-  const existingFrames = collectExistingFrames(page, flow.id);
-  const framesById = new Map<string, FrameNode>();
-  const usedStepIds = new Set<string>();
-
-  const layout = computeLayout(flow, stepsById);
-
-  for (const step of flow.steps) {
-    const frame = ensureStepFrame(page, existingFrames.get(step.id) ?? null, flow, step);
-    applyLayout(frame, layout.positions.get(step.id));
-    updateStepContent(frame, step);
-    framesById.set(step.id, frame);
-    usedStepIds.add(step.id);
-  }
-
-  removeUnusedFrames(existingFrames, usedStepIds);
-  await connectFrames(flow, framesById);
-
-  return flow.steps.length;
-}
-
-function collectExistingFrames(page: PageNode, flowId: string): Map<string, FrameNode> {
-  const frames = new Map<string, FrameNode>();
-  for (const child of page.children) {
-    if (child.type !== 'FRAME') {
-      continue;
-    }
-    const stepId = child.getPluginData(STEP_PLUGIN_DATA_KEY);
-    const recordedFlowId = child.getPluginData(FLOW_PLUGIN_DATA_KEY);
-    if (stepId && recordedFlowId === flowId) {
-      frames.set(stepId, child);
-    }
-  }
-  return frames;
-}
-
-function ensureStepFrame(
-  page: PageNode,
-  existing: FrameNode | null,
-  flow: Flow,
-  step: Step,
-): FrameNode {
-  const frame = existing ?? figma.createFrame();
-
-  frame.name = `${step.id} – ${step.name}`;
-  frame.resizeWithoutConstraints(STEP_WIDTH, STEP_HEIGHT);
-  frame.fills = [{ type: 'SOLID', color: { r: 1, g: 1, b: 1 } }];
-  frame.strokes = [{ type: 'SOLID', color: { r: 0.82, g: 0.85, b: 0.89 } }];
-  frame.strokeWeight = 2;
-  frame.cornerRadius = 16;
-  frame.layoutMode = 'VERTICAL';
-  frame.primaryAxisSizingMode = 'FIXED';
-  frame.counterAxisSizingMode = 'FIXED';
-  frame.itemSpacing = 16;
-  frame.paddingTop = 32;
-  frame.paddingBottom = 32;
-  frame.paddingLeft = 32;
-  frame.paddingRight = 32;
-  frame.primaryAxisAlignItems = 'MIN';
-  frame.counterAxisAlignItems = 'MIN';
-
-  frame.setPluginData(STEP_PLUGIN_DATA_KEY, step.id);
-  frame.setPluginData(FLOW_PLUGIN_DATA_KEY, flow.id);
-
-  if (frame.parent !== page) {
-    page.appendChild(frame);
-  }
-
-  return frame;
-}
-
-function updateStepContent(frame: FrameNode, step: Step) {
-  const title = ensureTextNode(frame, STEP_TITLE_PLUGIN_DATA_KEY);
-  title.characters = step.name;
-  title.fontName = FONT_NAME;
-  title.fontSize = 32;
-  title.fills = [{ type: 'SOLID', color: { r: 0.1, g: 0.1, b: 0.1 } }];
-  title.textAutoResize = 'WIDTH_AND_HEIGHT';
-
-  const pageIdText = ensureTextNode(frame, STEP_PAGE_PLUGIN_DATA_KEY);
-  pageIdText.characters = `Page ID: ${step.page}`;
-  pageIdText.fontName = FONT_NAME;
-  pageIdText.fontSize = 18;
-  pageIdText.fills = [{ type: 'SOLID', color: { r: 0.34, g: 0.4, b: 0.47 } }];
-  pageIdText.textAutoResize = 'WIDTH_AND_HEIGHT';
-}
-
-function ensureTextNode(frame: FrameNode, pluginDataKey: string): TextNode {
-  const existing = frame.children.find(
-    (child): child is TextNode => child.type === 'TEXT' && child.getPluginData(pluginDataKey) === 'true',
-  );
-
-  if (existing) {
-    return existing;
-  }
-
-  const text = figma.createText();
-  text.fontName = FONT_NAME;
-  text.setPluginData(pluginDataKey, 'true');
-  frame.appendChild(text);
-  return text;
-}
-
-function removeUnusedFrames(existing: Map<string, FrameNode>, usedStepIds: Set<string>) {
-  for (const [stepId, frame] of existing) {
-    if (!usedStepIds.has(stepId)) {
-      frame.remove();
-    }
-  }
-}
-
-type LayoutPosition = {
-  column: number;
-  row: number;
-};
-
-type LayoutResult = {
-  positions: Map<string, LayoutPosition>;
-};
-
-function computeLayout(flow: Flow, stepsById: Map<string, Step>): LayoutResult {
-  const positions = new Map<string, LayoutPosition>();
-  const queue: { id: string; column: number; row: number }[] = [];
-  const visited = new Set<string>();
-
-  queue.push({ id: flow.start, column: 0, row: 0 });
-
-  const branchRowOffsets = [0, -1, 1, -2, 2, -3, 3];
-
-  while (queue.length > 0) {
-    const current = queue.shift()!;
-    if (visited.has(current.id)) {
-      continue;
-    }
-    visited.add(current.id);
-
-    positions.set(current.id, { column: current.column, row: current.row });
-
-    const step = stepsById.get(current.id);
-    if (!step) {
-      continue;
-    }
-
-    if (step.next) {
-      const nextId = step.next;
-      if (!positions.has(nextId)) {
-        queue.push({ id: nextId, column: current.column + 1, row: current.row });
+  switch (msg.type) {
+    case 'scan': {
+      const started = Date.now();
+      log('Starting document scan');
+      try {
+        const registry = scanDocument();
+        const duration = Date.now() - started;
+        log('Completed document scan', { durationMs: duration, total: registry.total });
+        const message: PluginToUiScanResult = {
+          type: 'scan-result',
+          payload: registry,
+        };
+        figma.ui.postMessage(message);
+      } catch (error) {
+        logError('Document scan failed', error);
+        const message: PluginToUiError = {
+          type: 'error',
+          message: 'Failed to scan components. Check console for details.',
+        };
+        figma.ui.postMessage(message);
       }
+      break;
     }
 
-    if (step.branches && step.branches.length > 0) {
-      const usableOffsets = branchRowOffsets.slice(1);
-      step.branches.forEach((branch, index) => {
-        const rowOffset = usableOffsets[index] ?? usableOffsets[usableOffsets.length - 1];
-        const targetRow = current.row + rowOffset;
-        if (!positions.has(branch.next)) {
-          queue.push({ id: branch.next, column: current.column + 1, row: targetRow });
-        }
-      });
+    case 'thumbnail': {
+      log('Thumbnail requested', msg.nodeId);
+      try {
+        const dataUrl = await getThumbnail(msg.nodeId);
+        const message: PluginToUiThumbnailResult = {
+          type: 'thumbnail-result',
+          nodeId: msg.nodeId,
+          dataUrl,
+        };
+        figma.ui.postMessage(message);
+      } catch (error) {
+        logError('Thumbnail request failed', { nodeId: msg.nodeId, error });
+        const message: PluginToUiError = {
+          type: 'error',
+          message: 'Failed to export thumbnail. Check console for details.',
+        };
+        figma.ui.postMessage(message);
+        const fallback: PluginToUiThumbnailResult = {
+          type: 'thumbnail-result',
+          nodeId: msg.nodeId,
+          dataUrl: null,
+        };
+        figma.ui.postMessage(fallback);
+      }
+      break;
     }
+
+    case 'close': {
+      figma.closePlugin();
+      break;
+    }
+
+    default:
+      break;
   }
+};
 
-  for (const step of flow.steps) {
-    if (!positions.has(step.id)) {
-      positions.set(step.id, { column: flow.steps.indexOf(step), row: 0 });
-    }
-  }
+figma.ui.postMessage({ type: 'ready' });
 
-  return { positions };
-}
+// Message types -----------------------------------------------------------------
 
-function applyLayout(frame: FrameNode, position?: LayoutPosition) {
-  const column = position?.column ?? 0;
-  const row = position?.row ?? 0;
-  const x = column * (STEP_WIDTH + HORIZONTAL_GAP);
-  const y = row * (STEP_HEIGHT + VERTICAL_GAP);
-  frame.x = x;
-  frame.y = y;
-}
+type UiMessage =
+  | { type: 'scan' }
+  | { type: 'thumbnail'; nodeId: string }
+  | { type: 'close' };
 
-async function connectFrames(flow: Flow, framesById: Map<string, FrameNode>) {
-  for (const step of flow.steps) {
-    const sourceFrame = framesById.get(step.id);
-    if (!sourceFrame) {
+type PluginToUiMessage = PluginToUiScanResult | PluginToUiThumbnailResult | PluginToUiError | PluginToUiReady;
+
+type PluginToUiScanResult = { type: 'scan-result'; payload: Registry };
+
+type PluginToUiThumbnailResult = { type: 'thumbnail-result'; nodeId: string; dataUrl: string | null };
+
+type PluginToUiError = { type: 'error'; message: string };
+
+type PluginToUiReady = { type: 'ready' };
+
+// Registry ----------------------------------------------------------------------
+
+type Registry = {
+  fileKey: string | null;
+  collectedAt: string;
+  total: number;
+  items: ComponentItem[];
+};
+
+type ComponentItem = {
+  id: string;
+  key?: string;
+  name: string;
+  canonical: string;
+  description?: string;
+  from: 'COMPONENT' | 'VARIANT' | 'COMPONENT_SET';
+  variantProps?: Record<string, string>;
+  pageName?: string;
+};
+
+// Scanning ----------------------------------------------------------------------
+
+function scanDocument(): Registry {
+  const items: ComponentItem[] = [];
+
+  for (const page of figma.root.children) {
+    if (page.type !== 'PAGE') {
       continue;
     }
 
-    const reactions: Reaction[] = [];
-
-    if (step.next) {
-      const target = framesById.get(step.next);
-      if (target) {
-        reactions.push(createReaction(target));
-      }
-    }
-
-    if (step.branches) {
-      step.branches.forEach((branch) => {
-        const target = framesById.get(branch.next);
-        if (target) {
-          reactions.push(createReaction(target, branch.condition));
-        }
-      });
-    }
-
-    sourceFrame.reactions = reactions;
+    log('Scanning page', { page: page.name });
+    traverseChildren(page, page.name, items);
   }
-}
 
-function createReaction(target: FrameNode, label?: string): Reaction {
+  items.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+
   return {
-    trigger: { type: 'ON_CLICK' },
-    action: {
-      type: 'NODE',
-      destinationId: target.id,
-      navigation: 'NAVIGATE',
-      transition: null,
-    },
-    ...(label ? { label } : {}),
-  } as Reaction;
+    fileKey: figma.fileKey ?? null,
+    collectedAt: new Date().toISOString(),
+    total: items.length,
+    items,
+  };
 }
 
-function ensurePage(name: string): PageNode {
-  const existing = figma.root.children.find(
-    (page): page is PageNode => page.type === 'PAGE' && page.name === name,
-  );
+function traverseChildren(parent: ChildrenMixin, pageName: string, items: ComponentItem[]) {
+  for (const child of parent.children) {
+    processNode(child as SceneNode | ComponentSetNode, pageName, items);
+  }
+}
+
+function processNode(node: SceneNode | ComponentSetNode, pageName: string, items: ComponentItem[]) {
+  if (node.type === 'COMPONENT') {
+    log('Found component', { id: node.id, name: node.name, pageName });
+    items.push(createComponentItem(node, 'COMPONENT', pageName));
+  }
+
+  if (node.type === 'COMPONENT_SET') {
+    log('Found component set', { id: node.id, name: node.name, pageName, variants: node.children.length });
+    items.push(createComponentSetItem(node, pageName));
+    for (const variant of node.children) {
+      if (variant.type !== 'COMPONENT') {
+        continue;
+      }
+      log('Found variant', { id: variant.id, name: variant.name, pageName, set: node.name });
+      items.push(createVariantItem(node, variant, pageName));
+    }
+  }
+
+  if ('children' in node && node.type !== 'COMPONENT_SET') {
+    traverseChildren(node as unknown as ChildrenMixin, pageName, items);
+  }
+}
+
+function createComponentItem(node: ComponentNode, from: 'COMPONENT', pageName: string): ComponentItem {
+  return {
+    id: node.id,
+    key: node.key ?? undefined,
+    name: node.name,
+    canonical: canonicalize(node.name),
+    description: sanitizeDescription(node.description),
+    from,
+    pageName,
+  };
+}
+
+function createComponentSetItem(node: ComponentSetNode, pageName: string): ComponentItem {
+  return {
+    id: node.id,
+    key: node.key ?? undefined,
+    name: node.name,
+    canonical: canonicalize(node.name),
+    description: sanitizeDescription(node.description),
+    from: 'COMPONENT_SET',
+    pageName,
+  };
+}
+
+function createVariantItem(set: ComponentSetNode, node: ComponentNode, pageName: string): ComponentItem {
+  const variantProps = parseVariantProps(node.name);
+  const description = sanitizeDescription(node.description) ?? sanitizeDescription(set.description);
+
+  return {
+    id: node.id,
+    key: node.key ?? undefined,
+    name: node.name,
+    canonical: canonicalize(node.name),
+    description: description,
+    from: 'VARIANT',
+    variantProps: variantProps ?? undefined,
+    pageName,
+  };
+}
+
+// Helpers -----------------------------------------------------------------------
+
+function canonicalize(name: string): string {
+  const trimmed = name.trim().toLowerCase();
+  return trimmed
+    .replace(/\s+/g, '-')
+    .replace(/\//g, '.')
+    .replace(/_+/g, '_')
+    .replace(/-+/g, '-')
+    .replace(/\.+/g, '.');
+}
+
+function sanitizeDescription(description?: string): string | undefined {
+  if (!description) {
+    return undefined;
+  }
+  const value = description.trim();
+  return value.length > 0 ? value : undefined;
+}
+
+function parseVariantProps(name: string): Record<string, string> | null {
+  const parts = name.split(',');
+  const result: Record<string, string> = {};
+  let found = false;
+
+  for (const rawPart of parts) {
+    const cleaned = rawPart.trim();
+    if (!cleaned) {
+      continue;
+    }
+
+    const equalsIndex = cleaned.indexOf('=');
+    if (equalsIndex === -1) {
+      return null;
+    }
+
+    const key = cleaned.slice(0, equalsIndex).trim();
+    const value = cleaned.slice(equalsIndex + 1).trim();
+
+    if (!key || !value) {
+      return null;
+    }
+
+    result[key] = value;
+    found = true;
+  }
+
+  return found ? result : null;
+}
+
+// Thumbnails --------------------------------------------------------------------
+
+const thumbnailCache = new Map<string, string | null>();
+const thumbnailPromises = new Map<string, Promise<string | null>>();
+const thumbnailQueue: Array<() => Promise<void>> = [];
+let activeExports = 0;
+
+async function getThumbnail(nodeId: string): Promise<string | null> {
+  if (thumbnailCache.has(nodeId)) {
+    log('Thumbnail cache hit', { nodeId });
+    return thumbnailCache.get(nodeId) ?? null;
+  }
+
+  const existing = thumbnailPromises.get(nodeId);
   if (existing) {
+    log('Thumbnail promise in-flight', { nodeId });
     return existing;
   }
-  const page = figma.createPage();
-  page.name = name;
-  return page;
+
+  const promise = new Promise<string | null>((resolve) => {
+    thumbnailQueue.push(async () => {
+      try {
+        const node = figma.getNodeById(nodeId);
+        if (!node || !isExportableNode(node)) {
+          log('Thumbnail request node not exportable', { nodeId });
+          thumbnailCache.set(nodeId, null);
+          resolve(null);
+          return;
+        }
+
+        log('Exporting thumbnail', { nodeId });
+        const data = await node.exportAsync(PNG_EXPORT_OPTIONS);
+        const dataUrl = `data:image/png;base64,${figma.base64Encode(data)}`;
+        thumbnailCache.set(nodeId, dataUrl);
+        resolve(dataUrl);
+      } catch (error) {
+        logError('Thumbnail export failed', { nodeId, error });
+        thumbnailCache.set(nodeId, null);
+        const message: PluginToUiError = {
+          type: 'error',
+          message: 'Thumbnail export failed. Please try again.',
+        };
+        figma.ui.postMessage(message);
+        resolve(null);
+      }
+    });
+    processQueue();
+  });
+
+  thumbnailPromises.set(nodeId, promise);
+  promise.finally(() => {
+    thumbnailPromises.delete(nodeId);
+  });
+
+  return promise;
+}
+
+function processQueue() {
+  while (activeExports < MAX_CONCURRENT_EXPORTS && thumbnailQueue.length > 0) {
+    const task = thumbnailQueue.shift();
+    if (!task) {
+      continue;
+    }
+
+    activeExports += 1;
+    log('Processing thumbnail queue', { activeExports, pending: thumbnailQueue.length });
+    task()
+      .catch((error) => {
+        logError('Thumbnail task failed', error);
+      })
+      .finally(() => {
+        activeExports = Math.max(0, activeExports - 1);
+        log('Thumbnail task completed', { activeExports, pending: thumbnailQueue.length });
+        processQueue();
+      });
+  }
+}
+
+function isExportableNode(node: BaseNode): node is ExportMixin {
+  return 'exportAsync' in node && typeof (node as ExportMixin).exportAsync === 'function';
 }

@@ -1,8 +1,9 @@
 {
-  "name": "Flow Visualizer",
-  "id": "symbiont-flow-visualizer",
+  "name": "DS Component Browser",
+  "id": "symbiont-component-browser",
   "api": "1.0.0",
   "main": "dist/code.js",
   "ui": "dist/ui.html",
-  "editorType": ["figma"]
+  "editorType": ["figma"],
+  "permissions": ["currentfile"]
 }
